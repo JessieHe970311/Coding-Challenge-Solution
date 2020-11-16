@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<meta charset = "utf-8">
+<html>
+    <head>
+        <title>level-3</title>
+        <script src="http://d3js.org/d3.v5.js"></script>
+    </head>
+    <body>
+        <div id = "node_chart"; style="width:750px; height:auto; float:left; display:inline"></div>
+        <div id = "matrix_chart"; style="width:850px; height:auto; float:left; display:inline"></div>
+
+        <script type = "text/javascript">
+        /* define layout parameters */
+        var margin = {top:100, right:100, bottom:50, left:50},
+            total_width = 850,
+            total_height = 850,
+            width = total_width - margin.left - margin.right,
+            height = total_height - margin.top - margin.bottom,
+            grid_size = 10,
+            r = {min:10, max:20};
+            legend_size = {width: 15, height:15};
+
+        var co_matrix = [];
+        var co_matrix_max, co_matrix_min;
+        var index_list = [];
+        var grids, edges;
+
+        /* process the json data */
+        d3.json("HKUST_coauthor_graph.json").then(function(data){
+            /* find nodes whose dept == CSE */
+            var cse_nodes = data.nodes.filter(function(d){return d.dept == "CSE"});
+            var cse_id = [];
+            for(var i = 0; i < cse_nodes.length; i++){
+                cse_id.push(cse_nodes[i].id);
+            }
+            //console.log(cse_nodes);
+
+            /* filter out edges whose source or target is in CSE */
+            var cse_edges = data.edges.filter(function(d){return cse_id.includes(d.source) && cse_id.includes(d.target); })
+            //console.log(cse_edges);
+            var cse_sources = []
+            var cse_targets = []
+
+            for(var i = 0; i < cse_edges.length; i++){
+                cse_sources.push(cse_edges[i].source);
+                cse_targets.push(cse_edges[i].target);
+            }
+            //console.log(cse_sources);
+            //console.log(cse_targets);
+
+            /* filter out CSE nodes that have no edges */
+            cse_nodes = cse_nodes.filter(function(d){
+                return cse_sources.includes(d.id) || cse_targets.includes(d.id);
+            });
+
+            var cse_id_list = [];
+            for(var i = 0; i < cse_nodes.length; i++){
+                cse_id_list.push(cse_nodes[i].id);
+            }
+            //console.log(cse_id_list);
+
+            /* calculate the number of collaborators */
+            var reverse_cse_edges = cse_edges.map(function(d){
+                return{
+                    source: d.target,
+                    target: d.source,
+                    publications: d.publications
+                }
+            })
+            var total_edges = cse_edges.concat(reverse_cse_edges); 
+            
+            //console.log(total_edges);
+            
+            var counter = 0;
+            for( var i = 0; i < cse_nodes.length; i++){
+                for(var j = 0; j < total_edges.length; j++){
+                    if(total_edges[j].source == cse_nodes[i].id){
+                        counter += 1;
+                    }
+                }
+                //collabrators.push({
+                    //id:cse_nodes[i].id,
+                    //coNumber:counter
+               // });
+                cse_nodes[i].coNumber = counter;
+                counter = 0;
+            }
+            //index the cse_nodes with its natural order
+            for(var i = 0; i <cse_nodes.length; i++){
+                cse_nodes[i].m_index = i;
+                index_list.push(i);
+            }
+            //console.log(index_list);
+            
+            //initialize the co_matrix as all 0
+            for(var i = 0; i < cse_nodes.length; i++){
+                co_matrix[i] = new Array();
+                for(var j = 0; j < cse_nodes.length; j++){
+                    co_matrix[i][j] = 0;
+                }
+            }
+            //console.log(co_matrix);
+            co_matrix_max = 0;
+            co_matrix_min = 0;
+            for(var j = 0; j < total_edges.length; j++){
+                var s = cse_nodes.filter(function(d){return d.id == total_edges[j].source});
+                var t = cse_nodes.filter(function(d){return d.id == total_edges[j].target});
+                var m = s[0].m_index;
+                var n = t[0].m_index;
+                total_edges[j].s_index = m;
+                total_edges[j].t_index = n;
+                co_matrix[m][n] = total_edges[j].publications.length;
+                if(co_matrix[m][n] > co_matrix_max){
+                    co_matrix_max = co_matrix[m][n]; 
+                }
+                if(co_matrix[m][n] < co_matrix_min){
+                    co_matrix_min = co_matrix[m][n];
+                }    
+            }
+            //console.log(co_matrix);
+            //console.log(co_matrix_max);
+            //console.log(co_matrix_min);
+            console.log(total_edges);
+            return{
+                id_list:cse_id_list,
+                nodes:cse_nodes,
+                edges:cse_edges,
+                total_edges:total_edges
+            }
+        }).then(function(data){
+        /* build node-link chart */
+
+            /* build color and radii scale */
+            var colors_n = ['#8dd3c7','#ffffb3','#bebada','#fb8072','#80b1d3','#fddbc7','#e0e0e0'].reverse();
+            var color_scale_n = d3.scaleQuantile()
+                .domain([d3.min(data.nodes, function(d){ return d.coNumber;}),d3.max(data.nodes, function(d){ return d.coNumber;})])
+                .range(colors_n);
+            /* build radii scale according to the collaborator number */
+            var r_scale = d3.scaleLinear()
+                .domain([d3.min(data.nodes, function(d){ return d.coNumber;}),d3.max(data.nodes, function(d){ return d.coNumber;})])
+                .range([r.min, r.max]);
+
+            /* define tooltip */
+            var tooltip_n = d3.select("#node_chart")
+                .append("div")
+                .style("position", "absolute")
+                .style("z-index", "10")
+                .style("visibility", "hidden")
+                .style("background", "snow")
+                .style("font-size", "12px")
+                .text("a simple tooltip");
+            
+            /* create svg element */
+            var svg_n = d3.select("#node_chart").append("svg")
+                .attr("width", total_width - 100)
+                .attr("height", total_height - 100)
+                .append("g")
+                .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+            /* append edges to svg */
+            edges = svg_n.append("g")
+                .selectAll("edge")
+                .data(data.edges)
+                .enter()
+                .append("line")
+                .attr("stroke", "gray")
+                .attr("stroke-opacity", 0.5);
+            /* append nodes to svg */
+            var nodes = svg_n.append("g")
+                .selectAll("node")
+                .data(data.nodes)
+                .enter()
+                .append("circle")
+                .attr("r", function(d){
+                    return r_scale(d.coNumber)})
+                .attr("fill", function(d){
+                    return color_scale_n(d.coNumber)})
+                .on("mouseover", function(d){
+                    tooltip_n.text(d.fullname).style("visibility","visible");
+
+                    grids.style("stroke", function(v){
+                        if (v.x_value == d.m_index || v.y_value == d.m_index)
+                            return "#bcbddc";
+                        else
+                            return "transparent";
+                    });
+                })
+                .on("mousemove", function(){ 
+                tooltip_n.style("top", (d3.event.pageY - 10) + "px")
+                    .style("left",(d3.event.pageX + 10) + "px"); })
+                .on("mouseout", function(d){
+                    tooltip_n.style("visibility", "hidden");
+                    grids.style("stroke", "transparent");
+                });
+            
+            /* build force graph */
+            var simulation = d3.forceSimulation(data.nodes)
+                .force("edge", d3.forceLink(data.edges).id(function(d){ return d.id; }))
+                .force("charge", d3.forceManyBody().strength(-200).distanceMin(100).distanceMax(300))
+                .force("center", d3.forceCenter(width / 3 + margin.left, height / 2));
+
+            simulation.on("tick", function(){
+                edges
+                .attr("x1", function(d){ return d.source.x; })
+                .attr("y1", function(d){ return d.source.y; })
+                .attr("x2", function(d){ return d.target.x; })
+                .attr("y2", function(d){ return d.target.y; });
+                nodes
+                .attr("cx", function(d){ return d.x; })
+                .attr("cy", function(d){ return d.y; });
+                });
+            return data;
+        }).then(function(data){
+            /* build matrix */
+            var m_scale_x = d3.scalePoint().domain(index_list).range([grid_size, width - 200]);
+            var m_scale_y = d3.scalePoint().domain(index_list).range([grid_size, width - 200]);
+
+            var colors_m = ['#8dd3c7','#ffffb3','#bebada','#fb8072','#80b1d3','#fdb462']
+            var color_scale_m = d3.scaleQuantile()
+                .domain([Math.log1p(co_matrix_min), Math.log1p(co_matrix_max)])
+                .range(colors_m);
+            
+            var svg_m = d3.select("#matrix_chart").append("svg")
+                .attr("width", total_width)
+                .attr("height", total_height)
+                .append("g")
+                .attr("transform", "translate(" + 2 * margin.left + "," + 2 * margin.top + ")");
+            
+            var tooltip_m = d3.select("#matrix_chart")
+                .append("div")
+                .style("position", "absolute")
+                .style("z-index", "10")
+                .style("visibility", "hidden")
+                .style("background", "snow")
+                .style("font-size", "12px")
+                .text("a simple tooltip");
+
+            var positions = [];
+            for (var i = 0; i < index_list.length; i++){
+                for (var j = 0; j < index_list.length; j++){
+                    positions.push({
+                        x_value:index_list[i],
+                        y_value:index_list[j],
+                        x:m_scale_x(index_list[i]) - grid_size / 2 + 50,
+                        y:m_scale_y(index_list[j]) - grid_size / 2,
+                        number:co_matrix[i][j]
+                   });
+                }
+            }   
+            grids = svg_m.append("g")
+                .selectAll("grids")
+                .data(positions)
+                .enter()
+                .append('rect')
+                .attr("x", function(d){ return d.x; })
+                .attr("y", function(d){ return d.y; })
+                .attr("width", grid_size)
+                .attr("height", grid_size)
+                .style("fill", function(d){if(d.number > 0){
+                        return color_scale_m(Math.log1p(d.number));
+                    }else{
+                        return "#F5F5F5";}                                     
+                    })
+                .attr("z-index", "1")
+                .on("mouseover", function(d){
+                    tooltip_m.text(d.number).style("visibility", "visible");
+                    
+                    edges.style("stroke-width", function(v){
+                       if ((d.x_value == v.source.m_index && d.y_value == v.source.m_index) || (d.y_value == v.source.m_index && d.x_value == v.target.m_index))
+                        return "10px"; 
+                   });
+                })
+                .on("mousemove", function(){ 
+                    tooltip_m.style("top", (d3.event.pageY - 10) + "px")
+                             .style("left",(d3.event.pageX + 10) + "px"); 
+                })
+                .on("mouseout", function(d){
+                   tooltip_m.style("visibility", "hidden");
+                   edges.style("stroke-width", "1px");
+                })
+            
+            var vertical_text = svg_m.append("g")
+                .selectAll("text")
+                .data(data.nodes)
+                .enter()
+                .append("text")
+                .attr("class", "mono")
+                .text(function(d){ 
+                    if (d.fullname.length != 0)
+                        return d.fullname;
+                    else
+                        return d.itsc; })
+                .attr("x", 0)
+                .attr("y", function(d, i){ return m_scale_y(d.m_index) + grid_size / 2 + 50;})
+                .style("font-size", "13px")
+                .attr("transform", "rotate(-90)");
+        
+            var horizontal_text = svg_m.append("g")
+                .selectAll("text")
+                .data(data.nodes)
+                .enter()
+                .append("text")
+                .attr("class", "mono")
+                .text(function(d){ 
+                    if (d.fullname.length != 0)
+                        return d.fullname;
+                    else
+                        return d.itsc; })
+                .attr("x", 50)
+                .attr("y", function(d, i){ return m_scale_y(d.m_index) + grid_size / 2; })
+                .style("text-anchor", "end")
+                .style("font-size", "13px")    
+
+            var legend = svg_m.append("g").selectAll(".legend")
+                .data([0].concat(color_scale_m.quantiles()))
+                .enter()
+                .append("rect")
+                .attr("x", width - 120)
+                .attr("y", function(d, i){ return i * legend_size.height + 10;})
+                .attr("width", legend_size.width)
+                .attr("height", legend_size.height)
+                .style("fill", function(d, i){ return colors_m[i];});  
+
+            var legend_text = svg_m.append("g").selectAll(".legend_text")
+                .data([0].concat(color_scale_m.quantiles()).concat([Math.log1p(co_matrix_max)]))
+                .enter().append("text")
+                .attr("class", "mono")
+                .text(function(d){ return Math.round(Math.expm1(d)).toString(); })
+                .attr("x", width - 120 + legend_size.width)
+                .attr("y", function(d, i){ return i * legend_size.height + 15; })
+                .style("fill", "gray")
+                .style("font-size", "10");     
+        })
+        </script>
+    </body>
+</html>
